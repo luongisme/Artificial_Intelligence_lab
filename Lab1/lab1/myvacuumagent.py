@@ -57,10 +57,35 @@ class MyAgentState:
                 self.pos_y -= 1
 
     """
+    Update perceived agent direction
+    """
+    def update_direction(self, action):
+        if action == ACTION_TURN_LEFT:
+            self.direction = (self.direction + 3) % 4
+
+        elif action == ACTION_TURN_RIGHT:
+            self.direction = (self.direction + 1) % 4
+
+    """
+    Update perceived agent direction and last action
+    """
+    def record_action(self, action):
+        self.update_direction(action)
+        self.last_action = action
+
+    """
     Update perceived or inferred information about a part of the world
     """
     def update_world(self, x, y, info):
         self.world[x][y] = info
+
+    """
+    Corrects the agent's position to (1, 1) if it is at home
+    """
+    def correct_position_with_home(self, home):
+        if home:
+            self.pos_x = 1
+            self.pos_y = 1
 
     """
     Dumps a map of the world as the agent knows it
@@ -89,8 +114,10 @@ class MyVacuumAgent(Agent):
 
     def __init__(self, world_width, world_height, log):
         super().__init__(self.execute)
+        self.mode = "GO_NORTH"
+        self.sweep_direction = AGENT_DIRECTION_EAST
         self.initial_random_actions = 10
-        self.iteration_counter = 10
+        self.iteration_counter = world_width*world_height*2
         self.state = MyAgentState(world_width, world_height)
         self.log = log
 
@@ -100,17 +127,39 @@ class MyVacuumAgent(Agent):
         self.initial_random_actions -= 1
         self.state.update_position(bump)
 
-        if action < 0.1666666:   # 1/6 chance
+        if action < 0.1666666:
             self.state.direction = (self.state.direction + 3) % 4
             self.state.last_action = ACTION_TURN_LEFT
             return ACTION_TURN_LEFT
-        elif action < 0.3333333: # 1/6 chance
+
+        elif action < 0.3333333:
             self.state.direction = (self.state.direction + 1) % 4
             self.state.last_action = ACTION_TURN_RIGHT
             return ACTION_TURN_RIGHT
-        else:                    # 4/6 chance
+
+        else:
             self.state.last_action = ACTION_FORWARD
             return ACTION_FORWARD
+
+    def do_action(self, action):
+        self.state.record_action(action)
+        return action
+
+    def face_direction(self, target_direction):
+
+        diff = (target_direction - self.state.direction) % 4
+
+        if diff == 0:
+            return None
+
+        if diff == 1:
+            return self.do_action(ACTION_TURN_RIGHT)
+
+        if diff == 3:
+            return self.do_action(ACTION_TURN_LEFT)
+
+        # opposite direction
+        return self.do_action(ACTION_TURN_RIGHT)
 
     def execute(self, percept):
 
@@ -148,13 +197,19 @@ class MyVacuumAgent(Agent):
                 self.log("Performance: {}".format(self.performance))
             return ACTION_NOP
 
-        self.log("Position: ({}, {})\t\tDirection: {}".format(self.state.pos_x, self.state.pos_y,
-                                                              direction_to_string(self.state.direction)))
-
         self.iteration_counter -= 1
 
         # Track position of agent
         self.state.update_position(bump)
+        self.state.correct_position_with_home(home)
+
+        self.log(
+            "Position: ({}, {})\t\tDirection: {}".format(
+                self.state.pos_x,
+                self.state.pos_y,
+                direction_to_string(self.state.direction)
+            )
+        )
 
         if bump:
             # Get an xy-offset pair based on where the agent is facing
@@ -174,12 +229,94 @@ class MyVacuumAgent(Agent):
 
         # Decide action
         if dirt:
-            self.log("DIRT -> choosing SUCK action!")
-            self.state.last_action = ACTION_SUCK
-            return ACTION_SUCK
-        elif bump:
-            self.state.last_action = ACTION_NOP
-            return ACTION_NOP
+            self.state.update_world(
+                self.state.pos_x,
+                self.state.pos_y,
+                AGENT_STATE_DIRT
+            )
+            return self.do_action(ACTION_SUCK)
+
+        elif home:
+            self.state.update_world(
+                self.state.pos_x,
+                self.state.pos_y,
+                AGENT_STATE_HOME
+            )
+
         else:
-            self.state.last_action = ACTION_FORWARD
-            return ACTION_FORWARD
+            self.state.update_world(
+                self.state.pos_x,
+                self.state.pos_y,
+                AGENT_STATE_CLEAR
+            )
+        # Phase 1: move north until reaching the north wall
+        if self.mode == "GO_NORTH":
+
+            # If the previous forward movement hit the north wall
+            if bump:
+                self.mode = "GO_WEST"
+
+                action = self.face_direction(AGENT_DIRECTION_WEST)
+
+                if action is not None:
+                    return action
+
+            # Make sure the agent is facing north
+            action = self.face_direction(AGENT_DIRECTION_NORTH)
+
+            if action is not None:
+                return action
+
+            # Already facing north -> move forward
+            return self.do_action(ACTION_FORWARD)
+
+        # Phase 2: move west until reaching the west wall
+        if self.mode == "GO_WEST":
+
+            # If the previous forward movement hit the west wall
+            if bump:
+                self.mode = "SWEEP_EAST"
+
+                action = self.face_direction(AGENT_DIRECTION_EAST)
+
+                if action is not None:
+                    return action
+
+            # Make sure the agent is facing west
+            action = self.face_direction(AGENT_DIRECTION_WEST)
+
+            if action is not None:
+                return action
+
+            # Already facing west -> move forward
+            return self.do_action(ACTION_FORWARD)
+
+        if self.mode == "SWEEP_EAST":
+
+            if bump:
+                self.mode = "MOVE_DOWN"
+
+                action = self.face_direction(AGENT_DIRECTION_SOUTH)
+
+                if action is not None:
+                    return action
+
+                return self.do_action(ACTION_FORWARD)
+
+            action = self.face_direction(AGENT_DIRECTION_EAST)
+
+            if action is not None:
+                return action
+
+            return self.do_action(ACTION_FORWARD)
+
+        # Phase 4: move down one row
+        if self.mode == "MOVE_DOWN":
+
+            action = self.face_direction(AGENT_DIRECTION_SOUTH)
+
+            if action is not None:
+                return action
+
+            self.mode = "AFTER_MOVE_DOWN"
+            return self.do_action(ACTION_FORWARD)
