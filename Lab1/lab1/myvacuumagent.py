@@ -320,3 +320,111 @@ class MyVacuumAgent(Agent):
 
             self.mode = "AFTER_MOVE_DOWN"
             return self.do_action(ACTION_FORWARD)
+
+        # Phase 5: check whether moving down was successful
+        if self.mode == "AFTER_MOVE_DOWN":
+
+            if bump:
+                self.mode = "RETURN_HOME"
+
+            else:
+                self.mode = "SWEEP_WEST"
+
+                action = self.face_direction(AGENT_DIRECTION_WEST)
+
+                if action is not None:
+                    return action
+
+                return self.do_action(ACTION_FORWARD)
+
+        # Phase 6: sweep from east to west
+        if self.mode == "SWEEP_WEST":
+
+            if bump:
+                self.mode = "MOVE_DOWN_FROM_WEST"
+
+                action = self.face_direction(AGENT_DIRECTION_SOUTH)
+
+                if action is not None:
+                    return action
+
+                return self.do_action(ACTION_FORWARD)
+
+            action = self.face_direction(AGENT_DIRECTION_WEST)
+
+            if action is not None:
+                return action
+
+            return self.do_action(ACTION_FORWARD)
+
+        # Phase 7: move down one row from the west side
+        if self.mode == "MOVE_DOWN_FROM_WEST":
+
+            action = self.face_direction(AGENT_DIRECTION_SOUTH)
+
+            if action is not None:
+                return action
+
+            self.mode = "AFTER_MOVE_DOWN_FROM_WEST"
+            return self.do_action(ACTION_FORWARD)
+
+        # Phase 8: check whether moving down from west side succeeded
+        if self.mode == "AFTER_MOVE_DOWN_FROM_WEST":
+
+            # Could not move down -> bottom wall reached
+            if self.mode == "AFTER_MOVE_DOWN_FROM_WEST":
+
+                if bump:
+                    self.mode = "RETURN_HOME"
+
+                else:
+                    self.mode = "SWEEP_EAST"
+
+                    action = self.face_direction(AGENT_DIRECTION_EAST)
+
+                    if action is not None:
+                        return action
+
+                    return self.do_action(ACTION_FORWARD)
+
+            # Successfully moved down -> prepare to sweep east
+            self.mode = "SWEEP_EAST"
+
+            action = self.face_direction(AGENT_DIRECTION_EAST)
+
+            if action is not None:
+                return action
+
+            return self.do_action(ACTION_FORWARD)
+
+        # Final phase: return to home at (1, 1)
+        if self.mode == "RETURN_HOME":
+
+            # Already at home -> shut down
+            if home:
+                self.mode = "DONE"
+                self.log("Cleaning completed. Agent returned home.")
+                self.log("Performance: {}".format(self.performance))
+                return self.do_action(ACTION_NOP)
+
+            # First move north until reaching the top row
+            if self.state.pos_y > 1:
+
+                action = self.face_direction(AGENT_DIRECTION_NORTH)
+
+                if action is not None:
+                    return action
+
+                return self.do_action(ACTION_FORWARD)
+
+            # Then move west until reaching home
+            if self.state.pos_x > 1:
+
+                action = self.face_direction(AGENT_DIRECTION_WEST)
+
+                if action is not None:
+                    return action
+
+                return self.do_action(ACTION_FORWARD)
+        if self.mode == "DONE":
+            return self.do_action(ACTION_NOP)
