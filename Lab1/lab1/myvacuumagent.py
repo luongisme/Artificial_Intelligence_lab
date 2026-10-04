@@ -1,5 +1,5 @@
 from lab1.vacuum import *
-
+from collections import deque
 DEBUG_OPT_DENSEWORLDMAP = False
 
 AGENT_STATE_UNKNOWN = 0
@@ -114,12 +114,22 @@ class MyVacuumAgent(Agent):
 
     def __init__(self, world_width, world_height, log):
         super().__init__(self.execute)
-        self.mode = "GO_NORTH"
-        self.sweep_direction = AGENT_DIRECTION_EAST
+
+        self.mode = "DFS_INIT"
+        self.home_path = []
+
         self.initial_random_actions = 10
-        self.iteration_counter = world_width*world_height*2
+        self.iteration_counter = world_width * world_height * 10
+
         self.state = MyAgentState(world_width, world_height)
         self.log = log
+
+        # DFS memory
+        self.visited = set()
+        self.dfs_stack = []
+        self.tried_directions = {}
+        self.pending_move = None
+        self.selected_direction = None
 
     def move_to_random_start_position(self, bump):
         action = random()
@@ -145,6 +155,52 @@ class MyVacuumAgent(Agent):
         self.state.record_action(action)
         return action
 
+    def get_neighbor(self, x, y, direction):
+
+        if direction == AGENT_DIRECTION_NORTH:
+            return (x, y - 1)
+
+        elif direction == AGENT_DIRECTION_EAST:
+            return (x + 1, y)
+
+        elif direction == AGENT_DIRECTION_SOUTH:
+            return (x, y + 1)
+
+        elif direction == AGENT_DIRECTION_WEST:
+            return (x - 1, y)
+
+    def has_tried_direction(self, x, y, direction):
+
+        position = (x, y)
+
+        if position not in self.tried_directions:
+            return False
+
+        return direction in self.tried_directions[position]
+
+    def get_untried_direction(self, x, y):
+
+        directions = [
+            AGENT_DIRECTION_NORTH,
+            AGENT_DIRECTION_EAST,
+            AGENT_DIRECTION_SOUTH,
+            AGENT_DIRECTION_WEST
+        ]
+
+        for direction in directions:
+            if not self.has_tried_direction(x, y, direction):
+                return direction
+
+        return None
+
+    def mark_direction_tried(self, x, y, direction):
+        position = (x, y)
+
+        if position not in self.tried_directions:
+            self.tried_directions[position] = set()
+
+        self.tried_directions[position].add(direction)
+
     def face_direction(self, target_direction):
 
         diff = (target_direction - self.state.direction) % 4
@@ -160,6 +216,184 @@ class MyVacuumAgent(Agent):
 
         # opposite direction
         return self.do_action(ACTION_TURN_RIGHT)
+
+    def find_path_to_home(self, start):
+
+        goal = (1, 1)
+
+        # Already at home
+        if start == goal:
+            return []
+
+        queue = deque([start])
+
+        # parent[cell] = previous cell on the BFS path
+        parent = {
+            start: None
+        }
+
+        # direction_used[cell] = direction used to enter this cell
+        direction_used = {}
+
+        directions = [
+            AGENT_DIRECTION_NORTH,
+            AGENT_DIRECTION_EAST,
+            AGENT_DIRECTION_SOUTH,
+            AGENT_DIRECTION_WEST
+        ]
+
+        while queue:
+
+            current = queue.popleft()
+
+            if current == goal:
+                break
+
+            x, y = current
+
+            for direction in directions:
+
+                neighbor = self.get_neighbor(
+                    x,
+                    y,
+                    direction
+                )
+
+                # Only travel through cells already known to be reachable
+                if neighbor not in self.visited:
+                    continue
+
+                # Already discovered by BFS
+                if neighbor in parent:
+                    continue
+
+                parent[neighbor] = current
+                direction_used[neighbor] = direction
+
+                queue.append(neighbor)
+
+        # No known path to home
+        if goal not in parent:
+            return None
+
+        # Reconstruct path from home back to start
+        path = []
+
+        current = goal
+
+        while current != start:
+            path.append(
+                direction_used[current]
+            )
+
+            current = parent[current]
+
+        path.reverse()
+
+        return path
+
+    def direction_between(self, current, target):
+
+        x, y = current
+        target_x, target_y = target
+
+        if target_x == x and target_y == y - 1:
+            return AGENT_DIRECTION_NORTH
+
+        elif target_x == x + 1 and target_y == y:
+            return AGENT_DIRECTION_EAST
+
+        elif target_x == x and target_y == y + 1:
+            return AGENT_DIRECTION_SOUTH
+
+        elif target_x == x - 1 and target_y == y:
+            return AGENT_DIRECTION_WEST
+
+        return None
+
+    def has_unexplored_frontier(self):
+
+        directions = [
+            AGENT_DIRECTION_NORTH,
+            AGENT_DIRECTION_EAST,
+            AGENT_DIRECTION_SOUTH,
+            AGENT_DIRECTION_WEST
+        ]
+
+        for x, y in self.visited:
+
+            for direction in directions:
+
+                nx, ny = self.get_neighbor(
+                    x,
+                    y,
+                    direction
+                )
+
+                # Outside the internal world
+                if not (
+                        0 <= nx < self.state.world_width
+                        and 0 <= ny < self.state.world_height
+                ):
+                    continue
+
+                neighbor = (nx, ny)
+
+                # Already known reachable
+                if neighbor in self.visited:
+                    continue
+
+                # Already known obstacle
+                if self.state.world[nx][ny] == AGENT_STATE_WALL:
+                    continue
+
+                # Unknown cell adjacent to a reachable cell
+                return True
+
+        return False
+
+    def is_exploration_complete(self):
+
+        directions = [
+            AGENT_DIRECTION_NORTH,
+            AGENT_DIRECTION_EAST,
+            AGENT_DIRECTION_SOUTH,
+            AGENT_DIRECTION_WEST
+        ]
+
+        for x, y in self.visited:
+
+            for direction in directions:
+
+                neighbor = self.get_neighbor(
+                    x,
+                    y,
+                    direction
+                )
+
+                nx, ny = neighbor
+
+                # Outside internal world boundaries
+                if not (
+                        0 <= nx < self.state.world_width
+                        and 0 <= ny < self.state.world_height
+                ):
+                    continue
+
+                # Already known reachable
+                if neighbor in self.visited:
+                    continue
+
+                # Already known wall
+                if self.state.world[nx][ny] == AGENT_STATE_WALL:
+                    continue
+
+                # Still an unresolved neighboring cell
+                return False
+
+        return True
+
+
 
     def execute(self, percept):
 
@@ -249,182 +483,358 @@ class MyVacuumAgent(Agent):
                 self.state.pos_y,
                 AGENT_STATE_CLEAR
             )
-        # Phase 1: move north until reaching the north wall
-        if self.mode == "GO_NORTH":
 
-            # If the previous forward movement hit the north wall
-            if bump:
-                self.mode = "GO_WEST"
 
-                action = self.face_direction(AGENT_DIRECTION_WEST)
+        # =========================
+        # Phase 1: Initialize DFS
+        # =========================
+        if self.mode == "DFS_INIT":
+            current = (
+                self.state.pos_x,
+                self.state.pos_y
+            )
 
-                if action is not None:
-                    return action
+            # Mark the starting cell as visited
+            self.visited.add(current)
 
-            # Make sure the agent is facing north
-            action = self.face_direction(AGENT_DIRECTION_NORTH)
+            # Start the DFS path from the current cell
+            self.dfs_stack.append(current)
 
-            if action is not None:
-                return action
+            # Move to the next DFS phase
+            self.mode = "DFS_SELECT"
 
-            # Already facing north -> move forward
-            return self.do_action(ACTION_FORWARD)
+        # =========================
+        # Phase 4: Process movement result
+        # =========================
+        if self.mode == "DFS_PROCESS_MOVE":
 
-        # Phase 2: move west until reaching the west wall
-        if self.mode == "GO_WEST":
+            move = self.pending_move
 
-            # If the previous forward movement hit the west wall
-            if bump:
-                self.mode = "SWEEP_EAST"
-
-                action = self.face_direction(AGENT_DIRECTION_EAST)
-
-                if action is not None:
-                    return action
-
-            # Make sure the agent is facing west
-            action = self.face_direction(AGENT_DIRECTION_WEST)
-
-            if action is not None:
-                return action
-
-            # Already facing west -> move forward
-            return self.do_action(ACTION_FORWARD)
-
-        if self.mode == "SWEEP_EAST":
-
-            if bump:
-                self.mode = "MOVE_DOWN"
-
-                action = self.face_direction(AGENT_DIRECTION_SOUTH)
-
-                if action is not None:
-                    return action
-
-                return self.do_action(ACTION_FORWARD)
-
-            action = self.face_direction(AGENT_DIRECTION_EAST)
-
-            if action is not None:
-                return action
-
-            return self.do_action(ACTION_FORWARD)
-
-        # Phase 4: move down one row
-        if self.mode == "MOVE_DOWN":
-
-            action = self.face_direction(AGENT_DIRECTION_SOUTH)
-
-            if action is not None:
-                return action
-
-            self.mode = "AFTER_MOVE_DOWN"
-            return self.do_action(ACTION_FORWARD)
-
-        # Phase 5: check whether moving down was successful
-        if self.mode == "AFTER_MOVE_DOWN":
-
-            if bump:
-                self.mode = "RETURN_HOME"
+            # Safety check
+            if move is None:
+                self.mode = "DFS_SELECT"
 
             else:
-                self.mode = "SWEEP_WEST"
+                target = move["to"]
 
-                action = self.face_direction(AGENT_DIRECTION_WEST)
-
-                if action is not None:
-                    return action
-
-                return self.do_action(ACTION_FORWARD)
-
-        # Phase 6: sweep from east to west
-        if self.mode == "SWEEP_WEST":
-
-            if bump:
-                self.mode = "MOVE_DOWN_FROM_WEST"
-
-                action = self.face_direction(AGENT_DIRECTION_SOUTH)
-
-                if action is not None:
-                    return action
-
-                return self.do_action(ACTION_FORWARD)
-
-            action = self.face_direction(AGENT_DIRECTION_WEST)
-
-            if action is not None:
-                return action
-
-            return self.do_action(ACTION_FORWARD)
-
-        # Phase 7: move down one row from the west side
-        if self.mode == "MOVE_DOWN_FROM_WEST":
-
-            action = self.face_direction(AGENT_DIRECTION_SOUTH)
-
-            if action is not None:
-                return action
-
-            self.mode = "AFTER_MOVE_DOWN_FROM_WEST"
-            return self.do_action(ACTION_FORWARD)
-
-        # Phase 8: check whether moving down from west side succeeded
-        if self.mode == "AFTER_MOVE_DOWN_FROM_WEST":
-
-            # Could not move down -> bottom wall reached
-            if self.mode == "AFTER_MOVE_DOWN_FROM_WEST":
-
+                # Movement failed -> obstacle/wall
                 if bump:
-                    self.mode = "RETURN_HOME"
+                    self.state.update_world(
+                        target[0],
+                        target[1],
+                        AGENT_STATE_WALL
+                    )
+
+                    self.pending_move = None
+                    self.selected_direction = None
+                    self.mode = "DFS_SELECT"
+
+                # Movement succeeded -> new reachable cell
+                else:
+                    if target not in self.visited:
+                        self.visited.add(target)
+                        self.dfs_stack.append(target)
+
+                    self.pending_move = None
+                    self.selected_direction = None
+                    self.mode = "DFS_SELECT"
+
+        # =========================
+        # Phase 6: Process backtrack result
+        # =========================
+        if self.mode == "DFS_PROCESS_BACKTRACK":
+
+            move = self.pending_move
+
+            # Safety check
+            if move is None:
+                self.mode = "DFS_SELECT"
+
+            else:
+                # Backtracking should normally succeed
+                if bump:
+                    self.log("Warning: Backtrack movement failed.")
+
+                    self.pending_move = None
+                    self.mode = "DFS_DONE"
 
                 else:
-                    self.mode = "SWEEP_EAST"
+                    # Remove the cell we just left
+                    if len(self.dfs_stack) > 1:
+                        self.dfs_stack.pop()
 
-                    action = self.face_direction(AGENT_DIRECTION_EAST)
+                    self.pending_move = None
+                    self.mode = "DFS_SELECT"
 
-                    if action is not None:
-                        return action
+        # =========================
+        # Phase 10: Process home movement
+        # =========================
+        if self.mode == "DFS_PROCESS_HOME_MOVE":
 
-                    return self.do_action(ACTION_FORWARD)
+            move = self.pending_move
 
-            # Successfully moved down -> prepare to sweep east
-            self.mode = "SWEEP_EAST"
+            if move is None:
+                self.mode = "PLAN_HOME_PATH"
 
-            action = self.face_direction(AGENT_DIRECTION_EAST)
+            else:
+                # This should normally never happen because
+                # BFS only uses previously visited cells.
+                if bump:
+                    self.log("Warning: Return-home movement failed. Replanning path.")
+
+                    self.pending_move = None
+                    self.mode = "PLAN_HOME_PATH"
+
+                else:
+                    # Successfully completed the first step
+                    if len(self.home_path) > 0:
+                        self.home_path.pop(0)
+
+                    self.pending_move = None
+                    self.mode = "RETURN_HOME"
+
+        # =========================
+        # Phase 2: Select next cell
+        # =========================
+        if self.mode == "DFS_SELECT":
+
+            if not self.has_unexplored_frontier():
+
+                self.log(
+                    "All reachable cells explored. Planning shortest path home."
+                )
+
+                self.mode = "PLAN_HOME_PATH"
+
+            else:
+                current_x = self.state.pos_x
+                current_y = self.state.pos_y
+
+                while True:
+
+                    direction = self.get_untried_direction(
+                        current_x,
+                        current_y
+                    )
+
+                    if direction is None:
+                        self.mode = "DFS_BACKTRACK"
+                        break
+
+                    neighbor = self.get_neighbor(
+                        current_x,
+                        current_y,
+                        direction
+                    )
+
+                    # Skip cells that are already visited
+                    if neighbor in self.visited:
+                        self.mark_direction_tried(
+                            current_x,
+                            current_y,
+                            direction
+                        )
+                        continue
+
+                    nx, ny = neighbor
+
+                    # Skip walls that are already known
+                    if (
+                            0 <= nx < self.state.world_width
+                            and 0 <= ny < self.state.world_height
+                            and self.state.world[nx][ny] == AGENT_STATE_WALL
+                    ):
+                        self.mark_direction_tried(
+                            current_x,
+                            current_y,
+                            direction
+                        )
+                        continue
+
+                    self.selected_direction = direction
+                    self.mode = "DFS_MOVE"
+                    break
+
+        # =========================
+        # Phase 3: Move to selected cell
+        # =========================
+        if self.mode == "DFS_MOVE":
+
+            direction = self.selected_direction
+
+            # Turn toward the selected direction
+            action = self.face_direction(direction)
 
             if action is not None:
                 return action
 
+            # Agent is now facing the selected direction
+            current = (
+                self.state.pos_x,
+                self.state.pos_y
+            )
+
+            neighbor = self.get_neighbor(
+                self.state.pos_x,
+                self.state.pos_y,
+                direction
+            )
+
+            # This direction is now actually being tried
+            self.mark_direction_tried(
+                self.state.pos_x,
+                self.state.pos_y,
+                direction
+            )
+
+            # Remember the attempted movement
+            self.pending_move = {
+                "from": current,
+                "to": neighbor,
+                "direction": direction,
+                "type": "EXPLORE"
+            }
+
+            # Next percept will tell us whether the move succeeded
+            self.mode = "DFS_PROCESS_MOVE"
+
             return self.do_action(ACTION_FORWARD)
 
-        # Final phase: return to home at (1, 1)
+
+
+        # =========================
+        # Phase 5: Backtrack
+        # =========================
+        if self.mode == "DFS_BACKTRACK":
+
+            # If only the root remains, DFS exploration is finished
+            if len(self.dfs_stack) <= 1:
+
+                if not self.has_unexplored_frontier():
+                    self.mode = "PLAN_HOME_PATH"
+
+                else:
+                    self.log(
+                        "Warning: DFS root reached while unexplored frontier remains."
+                    )
+                    self.mode = "DFS_DONE"
+            else:
+                current = (
+                    self.state.pos_x,
+                    self.state.pos_y
+                )
+
+                # Parent is the previous cell in the DFS path
+                parent = self.dfs_stack[-2]
+
+                direction = self.direction_between(
+                    current,
+                    parent
+                )
+
+                # Turn toward the parent
+                action = self.face_direction(direction)
+
+                if action is not None:
+                    return action
+
+                # Remember that this is a backtracking movement
+                self.pending_move = {
+                    "from": current,
+                    "to": parent,
+                    "direction": direction,
+                    "type": "BACKTRACK"
+                }
+
+                self.mode = "DFS_PROCESS_BACKTRACK"
+
+                return self.do_action(ACTION_FORWARD)
+
+        # =========================
+        # Phase 8: Plan path home
+        # =========================
+        if self.mode == "PLAN_HOME_PATH":
+
+            current = (
+                self.state.pos_x,
+                self.state.pos_y
+            )
+
+            self.home_path = self.find_path_to_home(
+                current
+            )
+
+            # No known route to home
+            if self.home_path is None:
+                self.log("Warning: No path to home was found.")
+                self.mode = "DFS_DONE"
+
+            else:
+                self.log(
+                    "Path home found. Length: {}".format(
+                        len(self.home_path)
+                    )
+                )
+
+                self.mode = "RETURN_HOME"
+
+        # =========================
+        # Phase 9: Return home
+        # =========================
         if self.mode == "RETURN_HOME":
 
-            # Already at home -> shut down
+            # Simulator confirms that the agent is home
             if home:
-                self.mode = "DONE"
-                self.log("Cleaning completed. Agent returned home.")
-                self.log("Performance: {}".format(self.performance))
-                return self.do_action(ACTION_NOP)
+                self.mode = "DFS_DONE"
 
-            # First move north until reaching the top row
-            if self.state.pos_y > 1:
+            # Path finished
+            elif len(self.home_path) == 0:
 
-                action = self.face_direction(AGENT_DIRECTION_NORTH)
+                self.log(
+                    "Home path exhausted but agent is not home. Replanning."
+                )
 
-                if action is not None:
-                    return action
+                self.mode = "PLAN_HOME_PATH"
 
-                return self.do_action(ACTION_FORWARD)
+            else:
+                direction = self.home_path[0]
 
-            # Then move west until reaching home
-            if self.state.pos_x > 1:
-
-                action = self.face_direction(AGENT_DIRECTION_WEST)
+                # Turn toward the next step
+                action = self.face_direction(direction)
 
                 if action is not None:
                     return action
 
+                current = (
+                    self.state.pos_x,
+                    self.state.pos_y
+                )
+
+                target = self.get_neighbor(
+                    self.state.pos_x,
+                    self.state.pos_y,
+                    direction
+                )
+
+                # Remember the movement before executing it
+                self.pending_move = {
+                    "from": current,
+                    "to": target,
+                    "direction": direction,
+                    "type": "RETURN_HOME"
+                }
+
+                self.mode = "DFS_PROCESS_HOME_MOVE"
+
                 return self.do_action(ACTION_FORWARD)
-        if self.mode == "DONE":
+
+        # =========================
+        # Phase 7: Finish DFS
+        # =========================
+        if self.mode == "DFS_DONE":
+            self.log("DFS exploration completed.")
+            self.log("Visited cells: {}".format(len(self.visited)))
+            self.log("Performance: {}".format(self.performance))
+
             return self.do_action(ACTION_NOP)
+
